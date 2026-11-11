@@ -1,5 +1,6 @@
-//! Encrypted DNS for devices: DNS over TLS (Android's "Private DNS") and DNS
-//! over HTTPS (iOS profiles, browsers), each able to carry a client ID — the
+//! Encrypted DNS for devices: DNS over TLS (Android's "Private DNS"), DNS
+//! over HTTPS (iOS profiles, browsers, also over HTTP/3) and DNS over QUIC
+//! (apps that speak it), each able to carry a client ID — the
 //! device's own name, `pixel.dns.example.com` or `/dns-query/pixel` — which
 //! then picks its profile and files its queries, wherever it connects from.
 //!
@@ -20,9 +21,11 @@ mod cert;
 mod cloudflare;
 mod doh;
 mod doh3;
+mod doq;
 mod dot;
 mod gate;
 mod profile;
+mod quic;
 mod rewind;
 
 use std::collections::HashMap;
@@ -75,6 +78,9 @@ pub struct SecureDnsStatus {
     /// DNS over HTTPS over HTTP/3, on the DoH port's UDP side.
     pub doh3: bool,
     pub doh3_error: Option<String>,
+    /// DNS over QUIC, on the DoT port's UDP side.
+    pub doq: bool,
+    pub doq_error: Option<String>,
     pub cert: Option<CertInfo>,
     /// The certificate works, but not for everything: a name it doesn't cover.
     pub cert_warning: Option<String>,
@@ -275,6 +281,7 @@ impl SecureDns {
                 && st.dot_error.is_none()
                 && st.doh_error.is_none()
                 && st.doh3_error.is_none()
+                && st.doq_error.is_none()
         };
         if healthy && self.applied.lock().as_ref() == Some(&key) {
             return;
@@ -293,7 +300,7 @@ impl SecureDns {
         if cfg.enabled {
             match self.start(cfg, ctx, tunnels_port, &mut status).await {
                 Ok(r) => {
-                    status.running = status.dot || status.doh;
+                    status.running = status.dot || status.doh || status.doq;
                     renewal = r;
                 }
                 Err(e) => {
@@ -476,35 +483,63 @@ impl SecureDns {
                 }
             }
         }
-        // HTTP/3 on the UDP side of the DNS over HTTPS port. Its own socket
-        // even where TCP is shared with Tunnels, which take no UDP.
+        // QUIC: HTTP/3 on the UDP side of the DNS over HTTPS port, DNS over
+        // QUIC on that of the DNS over TLS port, one endpoint for both where
+        // they're the same port. Their own sockets even where TCP is shared
+        // with Tunnels, which take no UDP.
+        let mut quic_ports: Vec<(u16, Vec<&'static [u8]>)> = Vec::new();
         if cfg.http3 && cfg.doh_port != 0 && status.doh {
+            quic_ports.push((cfg.doh_port, vec![quic::ALPN_H3]));
+        }
+        if cfg.doq && cfg.dot_port != 0 {
+            match quic_ports
+                .iter_mut()
+                .find(|(port, _)| *port == cfg.dot_port)
+            {
+                Some((_, alpn)) => alpn.push(quic::ALPN_DOQ),
+                None => quic_ports.push((cfg.dot_port, vec![quic::ALPN_DOQ])),
+            }
+        }
+        for (port, alpn) in quic_ports {
+            let (h3, doq) = (
+                alpn.contains(&quic::ALPN_H3),
+                alpn.contains(&quic::ALPN_DOQ),
+            );
             let certs = Arc::clone(&self.certs) as Arc<dyn rustls::server::ResolvesServerCert>;
-            let bound = doh3::server_config(certs, &hostname).and_then(|qc| {
-                doh3::bind(cfg.doh_port, qc).map_err(|e| match e.kind() {
-                    std::io::ErrorKind::AddrInUse => format!("UDP port {} is taken", cfg.doh_port),
+            let bound = quic::server_config(certs, &hostname, &alpn).and_then(|qc| {
+                quic::bind(port, qc).map_err(|e| match e.kind() {
+                    std::io::ErrorKind::AddrInUse => format!("UDP port {port} is taken"),
                     std::io::ErrorKind::PermissionDenied => {
-                        format!("no permission for UDP port {}", cfg.doh_port)
+                        format!("no permission for UDP port {port}")
                     }
-                    _ => format!("couldn't open UDP port {}: {e}", cfg.doh_port),
+                    _ => format!("couldn't open UDP port {port}: {e}"),
                 })
             });
             match bound {
                 Ok(endpoint) => {
-                    tracing::info!(
-                        "secure dns: DNS over HTTP/3 on :{}/udp as {hostname}",
-                        cfg.doh_port
-                    );
-                    serving.h3_port.store(cfg.doh_port, Ordering::Relaxed);
-                    status.doh3 = true;
-                    tasks.push(tokio::spawn(doh3::accept_loop(
+                    if h3 {
+                        tracing::info!("secure dns: DNS over HTTP/3 on :{port}/udp as {hostname}");
+                        serving.h3_port.store(port, Ordering::Relaxed);
+                        status.doh3 = true;
+                    }
+                    if doq {
+                        tracing::info!("secure dns: DNS over QUIC on :{port}/udp as {hostname}");
+                        status.doq = true;
+                    }
+                    tasks.push(tokio::spawn(quic::accept_loop(
                         endpoint,
                         Arc::clone(&serving),
                     )));
                 }
                 Err(msg) => {
-                    tracing::warn!("secure dns: no DNS over HTTP/3: {msg}");
-                    status.doh3_error = Some(msg);
+                    if h3 {
+                        tracing::warn!("secure dns: no DNS over HTTP/3: {msg}");
+                        status.doh3_error = Some(msg.clone());
+                    }
+                    if doq {
+                        tracing::warn!("secure dns: no DNS over QUIC: {msg}");
+                        status.doq_error = Some(msg);
+                    }
                 }
             }
         }

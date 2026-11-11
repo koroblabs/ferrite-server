@@ -148,6 +148,12 @@ pub(crate) fn how(cfg: &SecureDnsConfig, id: &str) -> Value {
         } else {
             format!("https://{host}:{}/dns-query/{id}", cfg.doh_port)
         }),
+        // Apps that speak DNS over QUIC, named in the TLS name as over TLS.
+        "doq_url": (cfg.doq && cfg.dot_port != 0).then(|| if cfg.dot_port == 853 {
+            format!("quic://{id}.{host}")
+        } else {
+            format!("quic://{id}.{host}:{}", cfg.dot_port)
+        }),
     })
 }
 

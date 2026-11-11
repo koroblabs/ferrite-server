@@ -41,6 +41,15 @@ fn view(state: &AppState) -> Value {
             format!("https://{host}:{}/dns-query", cfg.doh_port)
         }
     });
+    // DNS over QUIC rides the DNS over TLS port; apps write it quic://host,
+    // with the port only when it isn't 853.
+    let doq_url = (!host.is_empty() && cfg.doq && cfg.dot_port != 0).then(|| {
+        if cfg.dot_port == 853 {
+            format!("quic://{host}")
+        } else {
+            format!("quic://{host}:{}", cfg.dot_port)
+        }
+    });
     json!({
         "config": cfg,
         "token_set": token_set,
@@ -51,6 +60,7 @@ fn view(state: &AppState) -> Value {
             "dot_host": (!host.is_empty() && cfg.dot_port != 0).then(|| host.clone()),
             "dot_port": cfg.dot_port,
             "doh_url": doh_url,
+            "doq_url": doq_url,
         },
     })
 }
@@ -533,6 +543,11 @@ mod tests {
 
     /// A QUIC connection to `port` asking for `sni`, speaking HTTP/3.
     async fn h3_connect(port: u16, sni: &str) -> Result<quinn::Connection, String> {
+        quic_connect(port, sni, b"h3").await
+    }
+
+    /// A QUIC connection to `port` asking for `sni`, offering `alpn` only.
+    async fn quic_connect(port: u16, sni: &str, alpn: &[u8]) -> Result<quinn::Connection, String> {
         let mut tls = rustls::ClientConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
         ))
@@ -541,7 +556,7 @@ mod tests {
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(AnyCert))
         .with_no_client_auth();
-        tls.alpn_protocols = vec![b"h3".to_vec()];
+        tls.alpn_protocols = vec![alpn.to_vec()];
         let quic = quinn::crypto::rustls::QuicClientConfig::try_from(tls).unwrap();
         let mut endpoint = quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
         endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(quic)));
@@ -581,6 +596,105 @@ mod tests {
             }
         }
         body
+    }
+
+    /// One DNS over QUIC query on a stream of its own (RFC 9250); the answer.
+    async fn doq_ask(port: u16, sni: &str) -> Result<Vec<u8>, String> {
+        let conn = quic_connect(port, sni, b"doq").await?;
+        let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
+        // The message ID is 0 over QUIC.
+        let q = home_query(0);
+        let mut framed = (q.len() as u16).to_be_bytes().to_vec();
+        framed.extend_from_slice(&q);
+        send.write_all(&framed).await.map_err(|e| e.to_string())?;
+        send.finish().map_err(|e| e.to_string())?;
+        let raw = recv.read_to_end(65_537).await.map_err(|e| e.to_string())?;
+        let len = u16::from_be_bytes([raw[0], raw[1]]) as usize;
+        assert_eq!(raw.len(), len + 2, "one length-framed answer, then the end");
+        Ok(raw[2..].to_vec())
+    }
+
+    #[tokio::test]
+    async fn devices_ask_over_quic_and_are_known_by_their_id() {
+        let (state, db, config_path) =
+            ferrite_app::test_support::app_state_with_config_path("secure-dns-doq").await;
+        state
+            .inner
+            .custom_records
+            .add(&ferrite_core::config::CustomRecordConfig {
+                domain: "home.test".into(),
+                record_type: "A".into(),
+                value: "10.0.0.7".into(),
+                ttl: 60,
+            })
+            .unwrap();
+        let mut log = state.query_rx.lock().take().unwrap();
+        let (dot, doh) = (free_port(), free_port());
+
+        let Json(v) = put_secure_dns(State(state.clone()), Json(on(dot, doh)))
+            .await
+            .unwrap();
+        assert_eq!(v["status"]["doq"], true, "{v}");
+        assert_eq!(v["setup"]["doq_url"], format!("quic://dns.test:{dot}"));
+
+        // Named `kid` in the TLS name, on the DNS over TLS port's UDP side.
+        let answer = doq_ask(dot, "kid.dns.test").await.unwrap();
+        assert_eq!(&answer[..2], &[0, 0], "the answer keeps the query's ID");
+        assert_eq!(&answer[answer.len() - 4..], &[10, 0, 0, 7]);
+        assert_eq!(log.recv().await.unwrap().device, "id:kid");
+        // A name that isn't ours gets no certificate; each port offers only
+        // its own protocol.
+        assert!(quic_connect(dot, "www.youtube.com", b"doq").await.is_err());
+        assert!(quic_connect(dot, "dns.test", b"h3").await.is_err());
+        assert!(quic_connect(doh, "dns.test", b"doq").await.is_err());
+
+        // Switched off on its own: DNS over TLS carries on.
+        let mut no_doq = on(dot, doh);
+        no_doq.doq = false;
+        let Json(v) = put_secure_dns(State(state.clone()), Json(no_doq))
+            .await
+            .unwrap();
+        assert_eq!(v["status"]["doq"], false, "{v}");
+        assert_eq!(v["status"]["dot"], true, "{v}");
+        assert!(v["setup"]["doq_url"].is_null(), "{v}");
+
+        ferrite_app::test_support::cleanup_sqlite(&db);
+        let _ = std::fs::remove_file(&config_path);
+    }
+
+    #[tokio::test]
+    async fn one_port_for_both_takes_http3_and_quic_on_one_socket() {
+        let (state, db, config_path) =
+            ferrite_app::test_support::app_state_with_config_path("secure-dns-one-udp").await;
+        state
+            .inner
+            .custom_records
+            .add(&ferrite_core::config::CustomRecordConfig {
+                domain: "home.test".into(),
+                record_type: "A".into(),
+                value: "10.0.0.7".into(),
+                ttl: 60,
+            })
+            .unwrap();
+        let mut log = state.query_rx.lock().take().unwrap();
+        let port = free_port();
+
+        let Json(v) = put_secure_dns(State(state.clone()), Json(on(port, port)))
+            .await
+            .unwrap();
+        assert_eq!(v["status"]["doh3"], true, "{v}");
+        assert_eq!(v["status"]["doq"], true, "{v}");
+        assert!(v["status"]["doq_error"].is_null(), "{v}");
+
+        let answer = h3_get(port, "phone.dns.test", "/dns-query", 10).await;
+        assert_eq!(&answer[answer.len() - 4..], &[10, 0, 0, 7]);
+        assert_eq!(log.recv().await.unwrap().device, "id:phone");
+        let answer = doq_ask(port, "kid.dns.test").await.unwrap();
+        assert_eq!(&answer[answer.len() - 4..], &[10, 0, 0, 7]);
+        assert_eq!(log.recv().await.unwrap().device, "id:kid");
+
+        ferrite_app::test_support::cleanup_sqlite(&db);
+        let _ = std::fs::remove_file(&config_path);
     }
 
     /// A DoH GET over TLS to `sni`, behind a PROXY `header`.

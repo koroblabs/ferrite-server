@@ -133,6 +133,7 @@ mod tests {
             dot_port: free(),
             doh_port: free(),
             http3: false,
+            doq: false,
             devices: vec!["phone".into()],
             ..SecureDnsConfig::default()
         };

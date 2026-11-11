@@ -1214,6 +1214,11 @@ pub struct SecureDnsConfig {
     /// learn of it from the first answer over TCP; away from home it needs
     /// the router to send that UDP port here directly.
     pub http3: bool,
+    /// DNS over QUIC (RFC 9250) too, on `dot_port`'s UDP side, with the
+    /// device's client ID in the TLS name as for DNS over TLS. For apps that
+    /// speak it (AdGuard, dnsproxy); phones' own settings don't. Away from
+    /// home it needs that UDP port sent here directly, like HTTP/3.
+    pub doq: bool,
     /// The devices, by client ID, that are answered away from home. At home
     /// any device is; from the internet only these — the name and its
     /// wildcard are public, and this isn't a resolver for everyone.
@@ -1249,6 +1254,7 @@ impl Default for SecureDnsConfig {
             dot_port: 853,
             doh_port: 443,
             http3: true,
+            doq: true,
             devices: Vec::new(),
             proxies: Vec::new(),
             self_setup: SelfSetup::default(),
