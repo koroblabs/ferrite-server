@@ -209,7 +209,7 @@ docker run -d --name ferrite \
 with a `.sha256` next to each, so you can verify before running anything:
 
 ```bash
-VER=v0.2.0; ARCH=$(uname -m)-unknown-linux-musl
+VER=v0.2.1; ARCH=$(uname -m)-unknown-linux-musl
 BASE=https://github.com/koroblabs/ferrite-server/releases/download/$VER
 curl -fsSLO $BASE/ferrite-$VER-$ARCH.tar.gz
 curl -fsSL  $BASE/ferrite-$VER-$ARCH.tar.gz.sha256 | sha256sum -c -

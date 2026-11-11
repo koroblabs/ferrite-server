@@ -712,7 +712,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "ferrite"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -774,7 +774,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-api"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -825,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-app"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -854,7 +854,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-blocklist"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arc-swap",
  "ferrite-core",
@@ -875,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-clients"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "dashmap",
@@ -891,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "dirs",
@@ -913,7 +913,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-dhcp"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "libc",
  "parking_lot",
@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-dns"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -950,7 +950,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-edge"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "data-encoding",
  "hex",
@@ -968,7 +968,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-proxy"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arc-swap",
  "base64 0.22.1",
@@ -1002,7 +1002,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-secure"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arc-swap",
  "base64 0.22.1",
@@ -1033,7 +1033,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-stats"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1050,7 +1050,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-storage"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1064,7 +1064,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-updater"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1083,7 +1083,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-upstream"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arc-swap",
  "base64 0.22.1",
