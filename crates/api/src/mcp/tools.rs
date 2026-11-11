@@ -11,9 +11,10 @@ use axum::{
 };
 use serde_json::{Value, json};
 
+use super::diagnose::{self, find_device};
 use crate::ApiError;
 use ferrite_app::AppState;
-use ferrite_core::config::BlocklistProfileConfig;
+use ferrite_core::config::{BlocklistProfileConfig, RuleConfig};
 
 /// What a call came to.
 pub(super) enum Outcome {
@@ -38,8 +39,23 @@ fn api_err(e: ApiError) -> String {
     e.0.to_string()
 }
 
+/// What a tool does to the box, as the client is told in its annotations.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Effect {
+    /// Only reads.
+    Read,
+    /// Adds or sets something; doing it twice changes nothing more.
+    Set,
+    /// Takes something away.
+    Remove,
+    /// Each call counts again (a pause runs from now).
+    Again,
+    /// Reaches outside the box (fetches the lists).
+    Fetch,
+}
+
 /// One tool's listing.
-fn tool(name: &str, title: &str, description: &str, schema: Value, read_only: bool) -> Value {
+fn tool(name: &str, title: &str, description: &str, schema: Value, effect: Effect) -> Value {
     json!({
         "name": name,
         "title": title,
@@ -47,10 +63,10 @@ fn tool(name: &str, title: &str, description: &str, schema: Value, read_only: bo
         "inputSchema": schema,
         "annotations": {
             "title": title,
-            "readOnlyHint": read_only,
-            "destructiveHint": false,
-            "idempotentHint": true,
-            "openWorldHint": false,
+            "readOnlyHint": effect == Effect::Read,
+            "destructiveHint": effect == Effect::Remove,
+            "idempotentHint": effect != Effect::Again,
+            "openWorldHint": effect == Effect::Fetch,
         },
     })
 }
@@ -64,11 +80,18 @@ const WRITE_TOOLS: &[&str] = &[
     "block_domain",
     "allow_domain",
     "remove_domain_rule",
+    "keep_blocked",
     "pause_filtering",
     "resume_filtering",
     "set_service_blocked",
+    "set_device_profile",
+    "route_through_tunnel",
+    "remove_tunnel_route",
     "refresh_lists",
 ];
+
+/// A device, as every tool takes one.
+const CLIENT: &str = "The device: its IP, its MAC, or its name as list_clients shows it.";
 
 pub(super) fn definitions(allow_changes: bool) -> Vec<Value> {
     let mut tools = vec![
@@ -77,7 +100,23 @@ pub(super) fn definitions(allow_changes: bool) -> Vec<Value> {
             "Status",
             "Overview: is filtering on or paused, query counts, blocklist size, which device profiles are on right now, services blocked network-wide, SafeSearch, tunnel health.",
             no_args(),
-            true,
+            Effect::Read,
+        ),
+        tool(
+            "diagnose",
+            "Why doesn't it work?",
+            "Start here when a site or app doesn't work, on one device or everywhere. Looks at every name of that site the device asked for lately and what each got; why the blocked ones are blocked (a list, your own rule, a blocked service, the device's profile); whether the device is filtered at all right now; upstream failures and names that don't exist; tunnels that carry the names and whether they're up. Returns a verdict (blocked, not_filtered, tunnel_down, upstream_errors, no_queries, fine), findings in plain words, and the tool calls that would fix it. Explain those to the owner; don't make changes they haven't agreed to.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "site": { "type": "string", "description": "A catalog service (instagram, youtube — see list_services) or a domain or link (graph.instagram.com, https://www.bbc.co.uk/news)." },
+                    "client": { "type": "string", "description": "The device it fails on (optional): its IP, its MAC, or its name as list_clients shows it." },
+                    "minutes": { "type": "integer", "minimum": 1, "maximum": 1440, "default": 30, "description": "How far back to look in the query log." }
+                },
+                "required": ["site"],
+                "additionalProperties": false
+            }),
+            Effect::Read,
         ),
         tool(
             "search_queries",
@@ -94,7 +133,7 @@ pub(super) fn definitions(allow_changes: bool) -> Vec<Value> {
                 },
                 "additionalProperties": false
             }),
-            true,
+            Effect::Read,
         ),
         tool(
             "check_domain",
@@ -109,7 +148,14 @@ pub(super) fn definitions(allow_changes: bool) -> Vec<Value> {
                 "required": ["domain"],
                 "additionalProperties": false
             }),
-            true,
+            Effect::Read,
+        ),
+        tool(
+            "likely_breakage",
+            "Likely broken by a block",
+            "Names a list blocks that a device keeps asking for while it uses the site they belong to: what an app looks like when a block broke it (it opens, but the feed or login never comes). Each with the devices, the lists and how many tries. Manual rules and blocked services aren't included: those are the owner's choice. Also lists the names the owner chose to keep blocked.",
+            no_args(),
+            Effect::Read,
         ),
         tool(
             "top_domains",
@@ -124,7 +170,7 @@ pub(super) fn definitions(allow_changes: bool) -> Vec<Value> {
                 },
                 "additionalProperties": false
             }),
-            true,
+            Effect::Read,
         ),
         tool(
             "list_clients",
@@ -138,28 +184,50 @@ pub(super) fn definitions(allow_changes: bool) -> Vec<Value> {
                 },
                 "additionalProperties": false
             }),
-            true,
+            Effect::Read,
+        ),
+        tool(
+            "device_report",
+            "One device",
+            "Everything about one device: its addresses, the profile on for it now, whether it's filtered right now, its query and block counts, top and top-blocked domains and the services it used over the last hours, its encrypted DNS names, and names that seem broken on it.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "client": { "type": "string", "description": CLIENT },
+                    "hours": { "type": "integer", "minimum": 1, "maximum": 168, "default": 24 }
+                },
+                "required": ["client"],
+                "additionalProperties": false
+            }),
+            Effect::Read,
         ),
         tool(
             "list_profiles",
             "List profiles",
             "Per-device profiles: their devices, blocked services, lists, own block/allow entries, SafeSearch, schedule, and which are on right now.",
             no_args(),
-            true,
+            Effect::Read,
         ),
         tool(
             "list_services",
             "List services",
             "The built-in service catalog (YouTube, TikTok, Steam…) with the ids the other tools take, and which are blocked network-wide.",
             no_args(),
-            true,
+            Effect::Read,
         ),
         tool(
             "tunnel_status",
             "Tunnel status",
             "Tunnels (egresses) with their health and traffic, and the routing rules with their hit counts.",
             no_args(),
-            true,
+            Effect::Read,
+        ),
+        tool(
+            "encrypted_dns_status",
+            "Encrypted DNS",
+            "Encrypted DNS for devices: whether DNS over TLS, HTTPS, HTTP/3 and QUIC are listening and on which ports, the certificate and its renewal, the devices answered away from home, what each device types in, and queries turned away.",
+            no_args(),
+            Effect::Read,
         ),
         tool(
             "recent_logs",
@@ -173,7 +241,7 @@ pub(super) fn definitions(allow_changes: bool) -> Vec<Value> {
                 },
                 "additionalProperties": false
             }),
-            true,
+            Effect::Read,
         ),
     ];
     if allow_changes {
@@ -189,14 +257,14 @@ pub(super) fn definitions(allow_changes: bool) -> Vec<Value> {
                 "Block a domain",
                 "Add a domain to the network-wide block list. It also blocks its subdomains.",
                 domain_only.clone(),
-                false,
+                Effect::Set,
             ),
             tool(
                 "allow_domain",
                 "Allow a domain",
                 "Add a domain to the network-wide allow list (whitelist), so no list or rule blocks it — except a device profile's own block.",
                 domain_only,
-                false,
+                Effect::Set,
             ),
             tool(
                 "remove_domain_rule",
@@ -211,7 +279,19 @@ pub(super) fn definitions(allow_changes: bool) -> Vec<Value> {
                     "required": ["domain", "list"],
                     "additionalProperties": false
                 }),
-                false,
+                Effect::Remove,
+            ),
+            tool(
+                "keep_blocked",
+                "Keep a name blocked",
+                "The block on this name is fine: stop suggesting it in likely_breakage and on the dashboard. It covers its subdomains. Nothing about the block itself changes.",
+                json!({
+                    "type": "object",
+                    "properties": { "domain": { "type": "string" } },
+                    "required": ["domain"],
+                    "additionalProperties": false
+                }),
+                Effect::Set,
             ),
             tool(
                 "pause_filtering",
@@ -226,7 +306,7 @@ pub(super) fn definitions(allow_changes: bool) -> Vec<Value> {
                     "required": ["minutes"],
                     "additionalProperties": false
                 }),
-                false,
+                Effect::Again,
             ),
             tool(
                 "resume_filtering",
@@ -239,7 +319,7 @@ pub(super) fn definitions(allow_changes: bool) -> Vec<Value> {
                     },
                     "additionalProperties": false
                 }),
-                false,
+                Effect::Set,
             ),
             tool(
                 "set_service_blocked",
@@ -255,14 +335,61 @@ pub(super) fn definitions(allow_changes: bool) -> Vec<Value> {
                     "required": ["service", "blocked"],
                     "additionalProperties": false
                 }),
-                false,
+                Effect::Set,
+            ),
+            tool(
+                "set_device_profile",
+                "Put a device in a profile",
+                "Move a device into a profile (see list_profiles), taking it out of any other; or out of every profile, back to the network-wide rules.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "client": { "type": "string", "description": CLIENT },
+                        "profile": { "type": "string", "description": "Profile id; omit to take the device out of every profile." }
+                    },
+                    "required": ["client"],
+                    "additionalProperties": false
+                }),
+                Effect::Set,
+            ),
+            tool(
+                "route_through_tunnel",
+                "Route through a tunnel",
+                "Send a domain (with its subdomains; *.example.com for subdomains only) or a catalog service through a tunnel (see tunnel_status for their ids), for every device or only some. A name that already has a rule is moved to this tunnel. With fail_closed, connections are refused while the tunnel is down instead of going out directly.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "domain": { "type": "string" },
+                        "service": { "type": "string", "description": "Catalog service id, instead of a domain." },
+                        "egress": { "type": "string", "description": "Tunnel id." },
+                        "clients": { "type": "array", "items": { "type": "string" }, "description": "Only for these devices (IPs or MACs); empty for every device." },
+                        "fail_closed": { "type": "boolean", "default": true }
+                    },
+                    "required": ["egress"],
+                    "additionalProperties": false
+                }),
+                Effect::Set,
+            ),
+            tool(
+                "remove_tunnel_route",
+                "Stop routing through a tunnel",
+                "Remove the tunnel rule for a domain or a catalog service; its names go out directly again.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "domain": { "type": "string" },
+                        "service": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }),
+                Effect::Remove,
             ),
             tool(
                 "refresh_lists",
                 "Refresh lists",
                 "Fetch every subscribed blocklist and allowlist again now.",
                 no_args(),
-                false,
+                Effect::Fetch,
             ),
         ]);
     }
@@ -280,6 +407,13 @@ pub(super) async fn call(state: &AppState, name: &str, args: Value) -> Outcome {
     let s = state.clone();
     let result = match name {
         "get_status" => get_status(s).await,
+        "diagnose" => diagnose::diagnose(s, &args).await,
+        "likely_breakage" => crate::breakage::get_breakage(State(s))
+            .await
+            .map(|Json(v)| v)
+            .map_err(api_err),
+        "device_report" => device_report(s, &args).await,
+        "encrypted_dns_status" => Ok(crate::secure_dns::get_secure_dns(State(s)).await.0),
         "search_queries" => search_queries(s, &args).await,
         "check_domain" => check_domain(s, &args).await,
         "top_domains" => top_domains(s, &args).await,
@@ -291,6 +425,10 @@ pub(super) async fn call(state: &AppState, name: &str, args: Value) -> Outcome {
         "block_domain" => domain_rule(s, &args, true).await,
         "allow_domain" => domain_rule(s, &args, false).await,
         "remove_domain_rule" => remove_domain_rule(s, &args).await,
+        "keep_blocked" => keep_blocked(s, &args).await,
+        "set_device_profile" => set_device_profile(s, &args).await,
+        "route_through_tunnel" => route_through_tunnel(s, &args).await,
+        "remove_tunnel_route" => remove_tunnel_route(s, &args).await,
         "pause_filtering" => pause_filtering(s, &args).await,
         "resume_filtering" => resume_filtering(s, &args).await,
         "set_service_blocked" => set_service_blocked(s, &args).await,
@@ -471,6 +609,61 @@ async fn list_clients(s: AppState, args: &Value) -> Result<Value, String> {
     Ok(v)
 }
 
+async fn device_report(s: AppState, args: &Value) -> Result<Value, String> {
+    let d = find_device(&s, required(args, "client")?).await?;
+    let hours = int_arg(args, "hours", 24, 168);
+    let bl = &s.inner.blocklist;
+    let ip = d.ip.clone().unwrap_or_default();
+    let profile = bl
+        .profile_for(&ip, d.mac.as_deref())
+        .map(|p| p.id().to_string());
+    let filtering_off =
+        !bl.blocking_enabled() || bl.client_filtering_off_normalized(&ip, d.mac.as_deref());
+    // Statistics may be off, or the device too new to have any: say so
+    // rather than fail the whole report.
+    let stats = match crate::clients::client_ip_stats(
+        State(s.clone()),
+        Path(d.token.clone()),
+        Query(crate::clients::DeviceStatsParams { hours: Some(hours) }),
+    )
+    .await
+    {
+        Ok(Json(v)) => v,
+        Err(e) => json!({ "unavailable": api_err(e) }),
+    };
+    let encrypted_dns_names: Vec<String> = {
+        let cfg = s.live_config.read();
+        cfg.secure_dns
+            .owners
+            .iter()
+            .filter(|(_, owner)| {
+                [d.mac.as_deref(), d.ip.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|k| k.eq_ignore_ascii_case(owner))
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    };
+    let breakage: Vec<Value> = s
+        .inner
+        .live_stats
+        .breakage
+        .suspects()
+        .into_iter()
+        .filter(|x| x.device == d.token)
+        .map(|x| json!({ "domain": x.domain, "site": x.site, "tries": x.tries, "last": x.last }))
+        .collect();
+    Ok(json!({
+        "device": d.json(),
+        "profile": profile,
+        "filtering_off": filtering_off,
+        "encrypted_dns_names": encrypted_dns_names,
+        "likely_breakage": breakage,
+        "stats": stats,
+    }))
+}
+
 fn list_services(s: &AppState) -> Value {
     let services: Vec<Value> = ferrite_core::services::catalog()
         .iter()
@@ -627,6 +820,125 @@ async fn set_service_blocked(s: AppState, args: &Value) -> Result<Value, String>
             Ok(v)
         }
     }
+}
+
+async fn keep_blocked(s: AppState, args: &Value) -> Result<Value, String> {
+    let payload = crate::breakage::IgnorePayload {
+        domain: required(args, "domain")?.to_string(),
+    };
+    let Json(v) = crate::breakage::ignore(State(s), Json(payload))
+        .await
+        .map_err(api_err)?;
+    Ok(v)
+}
+
+async fn set_device_profile(s: AppState, args: &Value) -> Result<Value, String> {
+    let d = find_device(&s, required(args, "client")?).await?;
+    let target = str_arg(args, "profile").filter(|p| !p.eq_ignore_ascii_case("none"));
+    let mut profiles: Vec<BlocklistProfileConfig> = s.inner.blocklist.get_profiles();
+    if let Some(id) = target
+        && !profiles.iter().any(|p| p.id == id)
+    {
+        return Err(format!("no profile `{id}` (see list_profiles)"));
+    }
+    // Every way the profiles may know the device, so it ends up in one.
+    let keys: Vec<&str> = [d.mac.as_deref(), d.ip.as_deref(), Some(d.token.as_str())]
+        .into_iter()
+        .flatten()
+        .collect();
+    for p in &mut profiles {
+        p.clients
+            .retain(|c| !keys.iter().any(|k| k.eq_ignore_ascii_case(c.trim())));
+    }
+    if let Some(id) = target
+        && let Some(p) = profiles.iter_mut().find(|p| p.id == id)
+    {
+        p.clients
+            .push(d.mac.clone().unwrap_or_else(|| d.token.clone()));
+    }
+    let _ = crate::profiles::put_profiles(State(s), Json(profiles))
+        .await
+        .map_err(api_err)?;
+    Ok(json!({ "status": "ok", "device": d.json(), "profile": target }))
+}
+
+/// The domain or the service a tunnel rule is for: exactly one of them.
+fn rule_target(args: &Value) -> Result<(String, Option<String>), String> {
+    match (str_arg(args, "domain"), str_arg(args, "service")) {
+        (Some(d), None) => Ok((d.trim_end_matches('.').to_ascii_lowercase(), None)),
+        (None, Some(svc)) => Ok((String::new(), Some(svc.to_ascii_lowercase()))),
+        _ => Err("give either `domain` or `service`".into()),
+    }
+}
+
+fn same_target(r: &RuleConfig, pattern: &str, service: &Option<String>) -> bool {
+    match service {
+        Some(id) => r.service.as_deref() == Some(id.as_str()),
+        None => r.service.is_none() && r.pattern.eq_ignore_ascii_case(pattern),
+    }
+}
+
+async fn route_through_tunnel(s: AppState, args: &Value) -> Result<Value, String> {
+    let egress = required(args, "egress")?.to_ascii_lowercase();
+    let (pattern, service) = rule_target(args)?;
+    let clients = strings_arg(args, "clients");
+    let fail_closed = args
+        .get("fail_closed")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    // From the live config, whose secrets are whole (GET hides them).
+    let mut cfg = s.live_config.read().proxy.clone();
+    if !cfg
+        .egresses
+        .iter()
+        .any(|e| e.id.eq_ignore_ascii_case(&egress))
+    {
+        return Err(format!("no tunnel `{egress}` (see tunnel_status)"));
+    }
+    match cfg
+        .rules
+        .iter_mut()
+        .find(|r| same_target(r, &pattern, &service))
+    {
+        Some(r) => {
+            r.egress = egress.clone();
+            r.clients = clients;
+            r.fail_closed = fail_closed;
+        }
+        None => cfg.rules.push(RuleConfig {
+            pattern,
+            service,
+            egress,
+            fail_closed,
+            clients,
+        }),
+    }
+    let _ = crate::proxy::put_proxy(State(s.clone()), Json(cfg))
+        .await
+        .map_err(api_err)?;
+    let enabled = s.live_config.read().proxy.enabled;
+    Ok(json!({
+        "status": "ok",
+        "tunnels_enabled": enabled,
+        "note": (!enabled).then_some(
+            "Tunnels are switched off, so the rule is saved but routes nothing until they're on."
+        ),
+    }))
+}
+
+async fn remove_tunnel_route(s: AppState, args: &Value) -> Result<Value, String> {
+    let (pattern, service) = rule_target(args)?;
+    let mut cfg = s.live_config.read().proxy.clone();
+    let before = cfg.rules.len();
+    cfg.rules.retain(|r| !same_target(r, &pattern, &service));
+    let removed = before - cfg.rules.len();
+    if removed == 0 {
+        return Err("no tunnel rule for that (see tunnel_status)".into());
+    }
+    let _ = crate::proxy::put_proxy(State(s), Json(cfg))
+        .await
+        .map_err(api_err)?;
+    Ok(json!({ "status": "ok", "removed": removed }))
 }
 
 async fn refresh_lists(s: AppState) -> Result<Value, String> {

@@ -9,6 +9,8 @@
 //! and logging stay in one place. Authentication is the API's own — the route
 //! sits behind the same middleware, so an assistant connects with the API key.
 
+mod diagnose;
+mod prompts;
 mod tools;
 
 use axum::{
@@ -30,10 +32,13 @@ const SUPPORTED_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
 /// What the assistant is told about this server when it connects.
 const INSTRUCTIONS: &str = "ferrite is the home network's DNS filter and router. Every device \
 asks it for names; it blocks ads, trackers and chosen services (network-wide or per device \
-profile), enforces SafeSearch, and can route chosen domains through tunnels. To explain why a \
-site doesn't load, call check_domain (pass the device's IP to see its profile's decision) and \
-search_queries for what the device actually asked. Changes (blocking, allowing, pausing) are \
-only offered when the owner has allowed them.";
+profile), enforces SafeSearch, and can route chosen domains through tunnels. When something \
+doesn't work, call diagnose with the site and, if known, the device (its name, IP or MAC): it \
+says whether the filter is the cause and which tool call would fix it. likely_breakage lists \
+blocked names that seem to break apps; device_report tells everything about one device; \
+check_domain and search_queries go into detail. Changes (blocking, allowing, pausing, \
+profiles, tunnels) are only offered when the owner has allowed them: explain a change and \
+wait for the owner's yes before making it.";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -147,6 +152,21 @@ async fn handle_message(state: &AppState, message: Value) -> Option<Value> {
     Some(match method {
         "initialize" => rpc_result(id, initialize(&params)),
         "ping" => rpc_result(id, json!({})),
+        "prompts/list" => rpc_result(id, prompts::list()),
+        "prompts/get" => {
+            let name = params
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let args = params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            match prompts::get(name, &args) {
+                Ok(v) => rpc_result(id, v),
+                Err(e) => rpc_error(id, INVALID_PARAMS, &e),
+            }
+        }
         "tools/list" => {
             let allow_changes = state.live_config.read().mcp.allow_changes;
             rpc_result(id, json!({ "tools": tools::definitions(allow_changes) }))
@@ -183,7 +203,10 @@ fn initialize(params: &Value) -> Value {
         .unwrap_or(SUPPORTED_VERSIONS[0]);
     json!({
         "protocolVersion": version,
-        "capabilities": { "tools": { "listChanged": false } },
+        "capabilities": {
+            "tools": { "listChanged": false },
+            "prompts": { "listChanged": false },
+        },
         "serverInfo": {
             "name": "ferrite",
             "title": "ferrite",

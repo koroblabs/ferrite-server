@@ -790,6 +790,7 @@ dependencies = [
  "ferrite-edge",
  "ferrite-proxy",
  "ferrite-secure",
+ "ferrite-stats",
  "ferrite-storage",
  "ferrite-updater",
  "ferrite-upstream",

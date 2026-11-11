@@ -85,8 +85,11 @@ what can't, before anything changes.
 
 **Automation.** Everything the panel does is a REST API. Prometheus metrics at
 `/api/metrics`, config export and import, self-update from the panel, and an
-MCP endpoint so an AI assistant can ask why a site is blocked — or, if you
-allow it, block one.
+MCP endpoint: ask an AI assistant why Instagram doesn't work on the kids'
+tablet and it reads what the tablet asked, finds the list, rule, service or
+profile in the way and offers the fix. If you allow it, it also blocks and
+allows, pauses, moves devices between profiles and routes names through
+tunnels.
 
 **Small and fast.** ~60 MB RSS on an ARM board serving 30 clients off a
 1.8M-domain blocklist, sub-2 ms cache and block decisions, tens of thousands
