@@ -492,6 +492,11 @@ pub struct BlocklistConfig {
     /// `wildcard_block` are global and apply to every profile.
     #[serde(default)]
     pub profiles: Vec<BlocklistProfileConfig>,
+    /// Blocked names the panel no longer offers to allow as likely breaking
+    /// something on a device: blocks that are fine as they are. Each covers
+    /// its subdomains.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub breakage_ignore: Vec<String>,
 }
 
 /// What a blocked name is answered with.
@@ -997,6 +1002,7 @@ impl Default for BlocklistConfig {
             whitelist: vec![],
             client_bypass: vec![],
             profiles: vec![],
+            breakage_ignore: vec![],
         }
     }
 }

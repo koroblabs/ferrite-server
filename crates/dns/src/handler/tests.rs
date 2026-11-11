@@ -297,6 +297,7 @@ fn blocklist() -> Blocklist {
             whitelist: vec![],
             client_bypass: vec![],
             profiles: vec![],
+            breakage_ignore: vec![],
         },
         ferrite_core::config::AllowlistConfig::default(),
         temp_fst_path("ferrite-dns-handler"),

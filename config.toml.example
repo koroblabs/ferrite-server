@@ -334,6 +334,12 @@ services = [
 # block_ipv4 = "192.168.1.5"
 # block_ipv6 = "fd00::5"
 
+# When a device keeps asking for a name a list blocks while it uses the site
+# that name belongs to, the dashboard suggests allowing it ("Right now").
+# Names whose block is fine as it is, so they aren't suggested again; each
+# covers its subdomains. The panel's "Keep blocked" button adds here.
+# breakage_ignore = ["analytics.example.com"]
+
 # Remote blocklist subscriptions (hosts or Adblock format, auto-detected).
 [[blocklist.lists]]
 name    = "StevenBlack"

@@ -654,6 +654,7 @@ mod blocking_tests {
                 whitelist: vec![],
                 client_bypass,
                 profiles: vec![],
+                breakage_ignore: vec![],
             },
             AllowlistConfig::default(),
             std::env::temp_dir().join(unique).join("blocklist.fst"),

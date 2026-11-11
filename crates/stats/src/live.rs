@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::breakage::BreakageWatch;
 use crate::recent::QueryRingBuffer;
 use crate::timeseries::InMemoryTimeseries;
 use crate::top_list::TopNCounter;
@@ -36,6 +37,9 @@ pub struct LiveStats {
     pub recent_queries: QueryRingBuffer,
     /// Rolling 24-hour timeseries (10-min buckets).
     pub timeseries: InMemoryTimeseries,
+    /// Devices asking again and again for a blocked name of a site they use:
+    /// likely broken by the block. Part of statistics, like the top lists.
+    pub breakage: BreakageWatch,
 }
 
 impl LiveStats {
@@ -54,6 +58,7 @@ impl LiveStats {
             client_blocked: TopNCounter::new(1_000),
             recent_queries: QueryRingBuffer::new(2_000),
             timeseries: InMemoryTimeseries::new(),
+            breakage: BreakageWatch::default(),
         })
     }
 
@@ -117,6 +122,7 @@ impl LiveStats {
             }
             self.timeseries
                 .increment(entry.timestamp.timestamp() as u64, status);
+            self.breakage.push(entry, device_key);
         }
 
         // Only the ring keeps the entry, so only the ring pays for a copy —
@@ -144,6 +150,7 @@ impl LiveStats {
         self.top_clients.clear();
         self.client_blocked.clear();
         self.timeseries.clear();
+        self.breakage.clear();
     }
 
     /// Reset all in-memory stats to zero. Called when the query log is cleared via the API.

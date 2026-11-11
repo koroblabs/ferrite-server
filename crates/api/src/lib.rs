@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod backup;
 pub mod blocklist;
+pub mod breakage;
 pub mod clients;
 pub mod companions;
 pub mod custom_records;
@@ -91,6 +92,10 @@ pub fn build_router(state: AppState) -> Router {
             delete(blocklist::del_whitelist),
         )
         .route("/blocklist/check/{domain}", get(blocklist::check_domain))
+        // Blocked names that seem to break a device, and the ones set aside
+        .route("/breakage", get(breakage::get_breakage))
+        .route("/breakage/ignore", post(breakage::ignore))
+        .route("/breakage/ignore/{domain}", delete(breakage::unignore))
         // Per-device blocking profiles (replace-whole-set, like /api/proxy)
         .route("/blocklist/profiles", get(profiles::get_profiles))
         .route("/blocklist/profiles", put(profiles::put_profiles))

@@ -1,3 +1,4 @@
+pub mod breakage;
 pub mod cpu_sampler;
 pub mod live;
 pub mod recent;

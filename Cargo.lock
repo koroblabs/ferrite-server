@@ -1040,6 +1040,8 @@ dependencies = [
  "ferrite-core",
  "ferrite-storage",
  "parking_lot",
+ "psl",
+ "serde",
  "sysinfo",
  "tokio",
  "tracing",
