@@ -41,7 +41,6 @@ memmap2.workspace = true
 psl.workspace = true
 regex.workspace = true
 rusqlite.workspace = true
-tokio-rusqlite.workspace = true
 mimalloc.workspace = true
 libmimalloc-sys.workspace = true
 dashmap.workspace = true

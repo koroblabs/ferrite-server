@@ -84,8 +84,7 @@ psl = "2"          # public suffix list (eTLD+1 boundaries)
 regex = "1"        # wildcard / adblock-style rule matching (blocklist/engine)
 
 # ── Storage (SQLite) ──────────────────────────────────────────────────────────
-rusqlite = { version = "0.37", features = ["bundled"] }  # embedded SQLite — query log, rollups, settings
-tokio-rusqlite = "0.7"                                   # async wrapper around rusqlite
+rusqlite = { version = "0.41", features = ["bundled"] }  # embedded SQLite — query log, rollups, settings
 
 # ── Allocator ─────────────────────────────────────────────────────────────────
 # musl's malloc retains freed pages and fragments badly under threads (the old

@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rusqlite::OptionalExtension;
-use tokio_rusqlite::Connection;
 
 use crate::schema::SCHEMA;
 use crate::{
     ClientStats, DeviceActivity, DeviceDomain, LegacyConfigRows, QueryFilter, SizeTrim, Storage,
     StoredDevice, StoredLease, StoredSession, SummaryStats, align_bucket,
 };
-use ferrite_core::error::{FeriteError, Result};
+use conn::Connection;
+use ferrite_core::error::Result;
 use ferrite_core::recording::RecordScope;
 use ferrite_core::types::TimeseriesBucket;
 use ferrite_core::types::{QueryEntry, QueryStatus};
@@ -135,7 +135,6 @@ impl SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 }
 
@@ -256,7 +255,6 @@ impl Storage for SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn max_query_id(&self) -> Result<u64> {
@@ -268,7 +266,6 @@ impl Storage for SqliteStorage {
                 Ok(id as u64)
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn query_range(&self, filter: &QueryFilter) -> Result<Vec<QueryEntry>> {
@@ -360,8 +357,7 @@ impl Storage for SqliteStorage {
 
                 Ok(rows)
             })
-            .await
-            .map_err(FeriteError::TokioDatabase)?;
+            .await?;
 
         let entries = rows
             .into_iter()
@@ -448,8 +444,7 @@ impl Storage for SqliteStorage {
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 Ok(rows)
             })
-            .await
-            .map_err(FeriteError::TokioDatabase)?;
+            .await?;
         Ok(rows)
     }
 
@@ -482,8 +477,7 @@ impl Storage for SqliteStorage {
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 Ok(rows)
             })
-            .await
-            .map_err(FeriteError::TokioDatabase)?;
+            .await?;
         Ok(rows)
     }
 
@@ -517,8 +511,7 @@ impl Storage for SqliteStorage {
                     last_seen,
                 }))
             })
-            .await
-            .map_err(FeriteError::TokioDatabase)?;
+            .await?;
         Ok(result)
     }
 
@@ -569,7 +562,6 @@ impl Storage for SqliteStorage {
                 Ok(rows)
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn device_activity(
@@ -607,7 +599,6 @@ impl Storage for SqliteStorage {
                 Ok(rows)
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn delete_all_queries(&self) -> Result<()> {
@@ -622,7 +613,6 @@ impl Storage for SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn vacuum(&self) -> Result<()> {
@@ -641,14 +631,10 @@ impl Storage for SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn delete_queries_older_than(&self, cutoff_ts: i64) -> Result<u64> {
-        self.conn
-            .call(move |c| delete_before(c, cutoff_ts))
-            .await
-            .map_err(FeriteError::TokioDatabase)
+        self.conn.call(move |c| delete_before(c, cutoff_ts)).await
     }
 
     async fn summary(&self, secs: u64) -> Result<(u64, u64)> {
@@ -684,8 +670,7 @@ impl Storage for SqliteStorage {
                 )?;
                 Ok(row)
             })
-            .await
-            .map_err(FeriteError::TokioDatabase)?;
+            .await?;
         Ok(result)
     }
 
@@ -709,7 +694,6 @@ impl Storage for SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn upsert_ip_binding(&self, ip: &str, mac: &str) -> Result<()> {
@@ -729,7 +713,6 @@ impl Storage for SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn delete_all_ip_bindings(&self) -> Result<()> {
@@ -739,7 +722,6 @@ impl Storage for SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn database_bytes(&self) -> Result<u64> {
@@ -750,7 +732,6 @@ impl Storage for SqliteStorage {
                 Ok((pages.max(0) as u64) * (page_size.max(0) as u64))
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn delete_all_devices(&self) -> Result<()> {
@@ -760,7 +741,6 @@ impl Storage for SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn save_session(&self, session: &StoredSession) -> Result<()> {
@@ -788,7 +768,6 @@ impl Storage for SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn delete_session(&self, token_hash: &str) -> Result<()> {
@@ -799,7 +778,6 @@ impl Storage for SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn load_sessions(&self, now: i64) -> Result<Vec<StoredSession>> {
@@ -826,7 +804,6 @@ impl Storage for SqliteStorage {
                 Ok(rows)
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn touch_ip_bindings(&self, ips: &[String]) -> Result<()> {
@@ -849,7 +826,6 @@ impl Storage for SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn delete_ip_bindings_older_than(&self, cutoff_ts: i64) -> Result<Vec<String>> {
@@ -869,7 +845,6 @@ impl Storage for SqliteStorage {
                 Ok(deleted)
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn load_devices(&self) -> Result<Vec<StoredDevice>> {
@@ -888,7 +863,6 @@ impl Storage for SqliteStorage {
                 Ok(rows)
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn upsert_dhcp_lease(&self, lease: &StoredLease) -> Result<()> {
@@ -907,7 +881,6 @@ impl Storage for SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn delete_dhcp_lease(&self, ip: &str) -> Result<()> {
@@ -918,7 +891,6 @@ impl Storage for SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn load_dhcp_leases(&self) -> Result<Vec<StoredLease>> {
@@ -939,7 +911,6 @@ impl Storage for SqliteStorage {
                 Ok(rows)
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn delete_expired_dhcp_leases(&self, now: i64) -> Result<()> {
@@ -949,7 +920,6 @@ impl Storage for SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn load_ip_bindings(&self) -> Result<Vec<(String, String)>> {
@@ -964,7 +934,6 @@ impl Storage for SqliteStorage {
                 Ok(rows)
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn prepare_size_cap(&self) -> Result<bool> {
@@ -985,7 +954,6 @@ impl Storage for SqliteStorage {
                 Ok(true)
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn enforce_size_cap(&self, max_bytes: u64) -> Result<SizeTrim> {
@@ -1035,7 +1003,6 @@ impl Storage for SqliteStorage {
                 Ok(trim)
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn load_legacy_config_rows(&self) -> Result<LegacyConfigRows> {
@@ -1087,7 +1054,6 @@ impl Storage for SqliteStorage {
                 Ok(rows)
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 
     async fn drop_legacy_config_tables(&self) -> Result<()> {
@@ -1105,7 +1071,6 @@ impl Storage for SqliteStorage {
                 Ok(())
             })
             .await
-            .map_err(FeriteError::TokioDatabase)
     }
 }
 
@@ -1252,8 +1217,7 @@ async fn top_domains_rollup_query(
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         })
-        .await
-        .map_err(FeriteError::TokioDatabase)?;
+        .await?;
     Ok(rows)
 }
 
@@ -1266,6 +1230,7 @@ impl SqliteStorage {
     }
 }
 
+mod conn;
 mod migrations;
 
 #[cfg(test)]

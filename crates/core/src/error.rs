@@ -23,8 +23,10 @@ pub enum FeriteError {
     #[error("database error: {0}")]
     Database(#[from] rusqlite::Error),
 
-    #[error("tokio-rusqlite error: {0}")]
-    TokioDatabase(#[from] tokio_rusqlite::Error),
+    /// The thread that owns the database connection is gone, so a call could
+    /// not reach it or its answer never came back.
+    #[error("the database connection is closed")]
+    DatabaseClosed,
 
     #[error("hickory resolver error: {0}")]
     Resolver(#[from] hickory_resolver::net::NetError),

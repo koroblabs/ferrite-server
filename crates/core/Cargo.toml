@@ -18,7 +18,6 @@ hickory-resolver.workspace = true
 postcard.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true
-tokio-rusqlite.workspace = true
 # memstats: mi_process_info for allocator-retention observability.
 libmimalloc-sys.workspace = true
 dirs.workspace = true

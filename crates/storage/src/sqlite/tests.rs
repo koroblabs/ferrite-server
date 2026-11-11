@@ -164,9 +164,7 @@ async fn a_new_database_is_ready_for_a_size_cap() {
 
     let mode: i64 = storage
         .conn
-        .call(|c| {
-            Ok::<i64, tokio_rusqlite::Error>(c.query_row("PRAGMA auto_vacuum", [], |r| r.get(0))?)
-        })
+        .call(|c| c.query_row("PRAGMA auto_vacuum", [], |r| r.get(0)))
         .await
         .unwrap();
     assert_eq!(mode, 2, "expected INCREMENTAL auto_vacuum");
@@ -325,7 +323,7 @@ async fn legacy_config_rows_are_handed_over_then_the_tables_go() {
                      VALUES ('192.168.1.10', 'ip', 'Laptop', 1),
                             ('aa:bb:cc:dd:ee:ff', 'mac', 'Phone', 2);",
             )?;
-            Ok::<_, tokio_rusqlite::Error>(())
+            Ok::<_, rusqlite::Error>(())
         })
         .await
         .unwrap();
