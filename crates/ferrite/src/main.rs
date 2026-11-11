@@ -1,3 +1,4 @@
+mod instance;
 mod setup;
 
 use std::{sync::Arc, time::Duration};
@@ -12,12 +13,60 @@ use ferrite_core::{config, logbuf, memstats};
 static ALLOC: memstats::CountingAlloc<mimalloc::MiMalloc> =
     memstats::CountingAlloc(mimalloc::MiMalloc);
 
+const USAGE: &str = "\
+ferrite: a DNS filter for the home network
+
+Usage:
+  ferrite            run the server
+  ferrite passwd     set or clear the web UI password
+  ferrite setup      find the local network's zones and save them to the config
+  ferrite version    print the version
+  ferrite help       print this
+
+The config is read from ~/.config/ferrite/config.toml, else /etc/ferrite/config.toml.
+";
+
+/// What the command line asks for.
+#[derive(Debug, PartialEq, Eq)]
+enum Command {
+    Serve,
+    Passwd,
+    Setup,
+    Version,
+    Help,
+    /// Anything else is a mistake, never a reason to start a second server.
+    Unknown(String),
+}
+
+fn command(args: &[String]) -> Command {
+    match args.get(1).map(String::as_str) {
+        None => Command::Serve,
+        Some("passwd") => Command::Passwd,
+        Some("setup") => Command::Setup,
+        Some("version" | "--version" | "-V") => Command::Version,
+        Some("help" | "--help" | "-h") => Command::Help,
+        Some(other) => Command::Unknown(other.to_string()),
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    match args.get(1).map(|s| s.as_str()) {
-        Some("passwd") => return cmd_passwd(),
-        Some("setup") => return setup::cmd_setup(),
-        _ => {}
+    match command(&args) {
+        Command::Serve => {}
+        Command::Passwd => return cmd_passwd(),
+        Command::Setup => return setup::cmd_setup(),
+        Command::Version => {
+            println!("ferrite {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Command::Help => {
+            print!("{USAGE}");
+            return Ok(());
+        }
+        Command::Unknown(arg) => {
+            eprint!("ferrite: unknown command `{arg}`\n\n{USAGE}");
+            std::process::exit(2);
+        }
     }
     // Before anything could replace the binary, and before a socket is bound:
     // a restart in place hands its sockets over through here.
@@ -114,6 +163,23 @@ async fn run() -> anyhow::Result<()> {
     let persistent_config = config::Config::load()?;
     let mut runtime_config = persistent_config.clone();
     tracing::info!("ferrite v{} starting", env!("CARGO_PKG_VERSION"));
+
+    // Before anything touches the network: a second ferrite on this config
+    // would tear down the first one's tunnels on its way to failing.
+    let _instance = match instance::take(&instance::lock_path()) {
+        instance::Lock::Held(lock) => Some(lock),
+        instance::Lock::Taken(path) => {
+            anyhow::bail!(
+                "another ferrite is already running with this config (it holds {}); \
+                 stop it first, or run `ferrite version` / `ferrite help` to look without starting one",
+                path.display()
+            );
+        }
+        instance::Lock::Unavailable(why) => {
+            tracing::warn!("running without the one-instance lock: {why}");
+            None
+        }
+    };
 
     // Apply the configured debug-logging level (unless RUST_LOG took over).
     if std::env::var_os("RUST_LOG").is_none() {
@@ -698,5 +764,39 @@ async fn wait_for_shutdown_signal() {
     #[cfg(not(unix))]
     {
         let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Command, command};
+
+    fn args(a: &[&str]) -> Vec<String> {
+        std::iter::once("ferrite")
+            .chain(a.iter().copied())
+            .map(String::from)
+            .collect()
+    }
+
+    #[test]
+    fn only_no_arguments_runs_the_server() {
+        assert_eq!(command(&args(&[])), Command::Serve);
+        assert_eq!(command(&args(&["passwd"])), Command::Passwd);
+        assert_eq!(command(&args(&["setup"])), Command::Setup);
+        for v in ["version", "--version", "-V"] {
+            assert_eq!(command(&args(&[v])), Command::Version);
+        }
+        for h in ["help", "--help", "-h"] {
+            assert_eq!(command(&args(&[h])), Command::Help);
+        }
+        // What used to start a second server quietly.
+        assert_eq!(
+            command(&args(&["--verison"])),
+            Command::Unknown("--verison".into())
+        );
+        assert_eq!(
+            command(&args(&["update", "web"])),
+            Command::Unknown("update".into())
+        );
     }
 }

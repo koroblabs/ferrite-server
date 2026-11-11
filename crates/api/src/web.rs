@@ -55,7 +55,9 @@ pub async fn static_handler(
     }
     Response::builder()
         .status(StatusCode::SERVICE_UNAVAILABLE)
-        .body(Body::from("Web UI not installed. Run: ferrite update web"))
+        .body(Body::from(
+            "Web UI not installed. Install it with POST /api/update/web (with the API key, if one is set), or run install.sh again.",
+        ))
         .expect("hardcoded response is valid")
 }
 
