@@ -655,6 +655,37 @@ When the exemption comes from a subscribed allowlist, `whitelist_match` names it
 }
 ```
 
+### `GET /api/breakage` — names a block seems to break
+
+Blocked names a device keeps asking for while it uses the site they belong to
+(the catalog service, else the registrable domain): three tries in ten minutes,
+tries closer than five seconds counting once, while that site answers the same
+device. Kept a day after the last try. Only names that subscription lists alone
+block are shown; a manual rule or a blocked service is the owner's choice.
+Latest first, at most 20, one row per name.
+
+```json
+{
+  "suspects": [
+    {
+      "domain": "graph.instagram.com", "site": "Instagram", "tries": 4,
+      "first": 1794353633, "last": 1794353639,
+      "lists": ["HaGeZi Pro"],
+      "devices": [{ "device": "aa:bb:cc:dd:ee:ff", "name": "pixel-8-pro", "ips": ["192.168.1.42"] }]
+    }
+  ],
+  "ignored": ["analytics.example.com"]
+}
+```
+
+Allowing a name is `POST /api/blocklist/whitelist`; it then drops out.
+
+### `POST /api/breakage/ignore` · `DELETE /api/breakage/ignore/:domain`
+
+`{ "domain": "analytics.example.com" }` keeps the name blocked and stops
+suggesting it (`[blocklist] breakage_ignore`, covering subdomains); `DELETE`
+suggests it again. Both answer `{ "domain": …, "persisted": true }`.
+
 ### `GET /api/blocklist/profiles` · `PUT /api/blocklist/profiles` — per-device profiles
 
 A profile applies a subset of the subscriptions to specific clients (IP/MAC);
@@ -820,19 +851,31 @@ rebinding). Protocol versions 2025-11-25, 2025-06-18 and 2025-03-26.
 | Tool | Does |
 |---|---|
 | `get_status` | Filtering on/paused, counts, profiles on now, services, SafeSearch, tunnel health |
+| `diagnose` | Why a site (service, domain or link) doesn't work, on a device (IP, MAC or name) or everywhere: each name it asked lately and what it got, why the blocked ones are blocked, pauses, upstream failures, tunnels. A verdict, findings and the tool calls that would fix it |
 | `search_queries` | The query log, by domain substring, client IP/MAC, status, last N minutes |
 | `check_domain` | Why a domain is blocked or allowed; with `client`, that device's decision |
 | `top_domains` | Most queried or most blocked over the last hours |
 | `list_clients` | Devices, their counts, first/last seen and the profile on now |
-| `list_profiles` · `list_services` · `tunnel_status` · `recent_logs` | As named |
+| `device_report` | One device: profile, whether it's filtered now, counts, top and blocked domains, services, encrypted DNS names, likely breakage |
+| `likely_breakage` | `GET /api/breakage` |
+| `list_profiles` · `list_services` · `tunnel_status` · `encrypted_dns_status` · `recent_logs` | As named |
 | `block_domain` · `allow_domain` · `remove_domain_rule` | The network-wide lists ¹ |
+| `keep_blocked` | `POST /api/breakage/ignore` ¹ |
 | `pause_filtering` · `resume_filtering` | Whole network or given devices ¹ |
 | `set_service_blocked` | A catalog service, network-wide or for a profile ¹ |
+| `set_device_profile` | Move a device into a profile, or out of every one ¹ |
+| `route_through_tunnel` · `remove_tunnel_route` | A domain or service through a tunnel, for every device or some ¹ |
 | `refresh_lists` | Fetch every list again ¹ |
 
 ¹ Only listed, and only run, while `allow_changes` is on. Changes go through
 the same handlers as the panel, so they are validated, persisted and logged the
-same way.
+same way. Each tool's annotations say whether it only reads, removes something,
+counts again on a repeat call, or reaches outside the box.
+
+Two prompts word the usual requests: `why_not_working` (`site`, optional
+`device`) and `network_report` (optional `hours`). The server's instructions
+ask the assistant to explain a change and wait for the owner's yes before
+making it.
 
 ### `GET /api/settings/mcp` · `PUT /api/settings/mcp`
 
