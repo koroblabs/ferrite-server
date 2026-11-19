@@ -275,6 +275,31 @@ pub async fn update_settings(
             )));
         }
 
+        // An API key with no password locks the panel out: every request
+        // then needs the key, and the panel signs in with a password.
+        if patch.api_key.is_some() || pre_hashed_password.is_some() {
+            let key_after = match &patch.api_key {
+                Some(key) => key.as_deref().is_some_and(|k| !k.trim().is_empty()),
+                None => cfg.api.has_api_key(),
+            };
+            let password_after = match &pre_hashed_password {
+                Some(hash) => hash.is_some(),
+                None => cfg.api.has_password(),
+            };
+            if key_after && !password_after {
+                return Err(ApiError(FeriteError::Config(
+                    if matches!(pre_hashed_password, Some(None)) {
+                        "the API key needs the password: without one the panel can't sign in. \
+                         Remove the API key first, then the password"
+                    } else {
+                        "an API key needs a password: without one the panel can't sign in. \
+                         Set a password first"
+                    }
+                    .into(),
+                )));
+            }
+        }
+
         // ── Hot-patchable ────────────────────────────────────────────────────
 
         if let Some(key) = patch.api_key {

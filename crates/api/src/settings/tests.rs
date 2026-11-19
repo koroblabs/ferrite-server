@@ -48,6 +48,8 @@ async fn get_settings_treats_blank_secret_fields_as_unset() {
 async fn hot_settings_patch_updates_runtime_state_and_persists_config() {
     let (state, db_path, config_path) =
         test_support::app_state_with_config_path("settings-hot-patch").await;
+    // An API key needs a password, for the panel to sign in with.
+    state.live_config.write().api.password_hash = Some("$argon2id$hash".to_string());
     let web_dir = test_support::temp_path("settings-web-dir", "dist");
     let log_ignore = vec!["*.lan".to_string(), "fe.te".to_string()];
 
@@ -766,4 +768,58 @@ async fn upstreams_zones_caches_and_panel_apply_live() {
 
     drop(state);
     test_support::cleanup_sqlite(&db_path);
+}
+
+#[tokio::test]
+async fn an_api_key_and_no_password_is_refused_either_way_round() {
+    let (state, db_path, config_path) =
+        test_support::app_state_with_config_path("settings-key-needs-password").await;
+    let patch = |api_key, password| {
+        update_settings(
+            State(state.clone()),
+            axum::http::HeaderMap::new(),
+            Json(SettingsPatch {
+                api_key,
+                password,
+                ..Default::default()
+            }),
+        )
+    };
+
+    // No password: an API key alone would lock the panel out.
+    let err = patch(Some(Some("key".into())), None).await.unwrap_err();
+    assert!(
+        err.0.to_string().contains("Set a password first"),
+        "{}",
+        err.0
+    );
+    assert!(!state.live_config.read().api.has_api_key());
+    assert!(!config_path.exists());
+
+    // Both at once is fine.
+    let Json(v) = patch(Some(Some("key".into())), Some(Some("secret".into())))
+        .await
+        .unwrap();
+    assert_eq!(v["status"], "ok");
+    assert!(state.live_config.read().api.has_api_key());
+    assert!(state.live_config.read().api.has_password());
+
+    // The password can't go while the key stays…
+    let err = patch(None, Some(None)).await.unwrap_err();
+    assert!(
+        err.0.to_string().contains("Remove the API key first"),
+        "{}",
+        err.0
+    );
+    assert!(state.live_config.read().api.has_password());
+
+    // …but after it, or with it.
+    let Json(v) = patch(Some(None), Some(None)).await.unwrap();
+    assert_eq!(v["status"], "ok");
+    let api = state.live_config.read().api.clone();
+    assert!(!api.has_api_key() && !api.has_password());
+
+    drop(state);
+    test_support::cleanup_sqlite(&db_path);
+    let _ = std::fs::remove_file(config_path);
 }

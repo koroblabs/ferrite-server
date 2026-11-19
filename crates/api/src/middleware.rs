@@ -44,13 +44,18 @@ pub async fn require_api_key(
 
     // 2. Check legacy API key.
     if let Some(expected_key) = &api_key
-        && let Some(provided) = extract_api_key(headers)
-        && provided.as_bytes().ct_eq(expected_key.as_bytes()).into()
+        && carries_api_key(headers, expected_key)
     {
         return next.run(request).await;
     }
 
     unauthorized()
+}
+
+/// Whether the request carries `expected`, the configured API key.
+pub(crate) fn carries_api_key(headers: &axum::http::HeaderMap, expected: &str) -> bool {
+    extract_api_key(headers)
+        .is_some_and(|provided| provided.as_bytes().ct_eq(expected.as_bytes()).into())
 }
 
 fn extract_api_key(headers: &axum::http::HeaderMap) -> Option<String> {

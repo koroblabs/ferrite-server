@@ -414,13 +414,34 @@ pub async fn revoke_other_sessions(
 }
 
 /// GET /api/auth — check if the caller has a valid session.
+///
+/// With an API key and no password, every other request needs the key, the
+/// panel's too — and there is no password to sign in with. `api_key_only`
+/// says so, and the panel asks for the key instead; it's in when it sends it.
 pub async fn check_auth(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    let has_password = state.live_config.read().api.has_password();
+    let (has_password, api_key) = {
+        let cfg = state.live_config.read();
+        (
+            cfg.api.has_password(),
+            cfg.api.api_key().map(str::to_string),
+        )
+    };
 
     if !has_password {
+        let Some(key) = api_key else {
+            return (
+                StatusCode::OK,
+                Json(json!({ "authenticated": true, "password_set": false })),
+            );
+        };
+        let ok = crate::middleware::carries_api_key(&headers, &key);
         return (
-            StatusCode::OK,
-            Json(json!({ "authenticated": true, "password_set": false })),
+            if ok {
+                StatusCode::OK
+            } else {
+                StatusCode::UNAUTHORIZED
+            },
+            Json(json!({ "authenticated": ok, "password_set": false, "api_key_only": true })),
         );
     }
 
@@ -541,6 +562,64 @@ mod tests {
 
         let response = check_auth(State(state.clone()), HeaderMap::new()).await;
         assert_eq!(response.into_response().status(), StatusCode::OK);
+
+        drop(state);
+        test_support::cleanup_sqlite(&db_path);
+    }
+
+    #[tokio::test]
+    async fn an_api_key_without_a_password_asks_the_panel_for_the_key() {
+        let (state, db_path) = test_support::app_state("auth-key-only").await;
+        state.live_config.write().api.api_key = Some("the-key".to_string());
+
+        let body = |res: axum::response::Response| async move {
+            let status = res.status();
+            let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap())
+        };
+
+        let (status, v) = body(
+            check_auth(State(state.clone()), HeaderMap::new())
+                .await
+                .into_response(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            v,
+            json!({ "authenticated": false, "password_set": false, "api_key_only": true })
+        );
+
+        for (name, value) in [
+            ("x-api-key", "the-key"),
+            ("authorization", "Bearer the-key"),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(name, HeaderValue::from_static(value));
+            let (status, v) = body(
+                check_auth(State(state.clone()), headers)
+                    .await
+                    .into_response(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{name}");
+            assert_eq!(v["authenticated"], true);
+        }
+
+        let mut wrong = HeaderMap::new();
+        wrong.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer not-the-key"),
+        );
+        let (status, _) = body(
+            check_auth(State(state.clone()), wrong)
+                .await
+                .into_response(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
 
         drop(state);
         test_support::cleanup_sqlite(&db_path);

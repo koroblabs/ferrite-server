@@ -92,6 +92,10 @@ fn config_error_code(message: &str) -> &'static str {
         "password_hash_failed"
     } else if message == "api_key cannot be empty; use null to disable key auth" {
         "api_key_empty"
+    } else if message.starts_with("the API key needs the password:") {
+        "password_kept_for_api_key"
+    } else if message.starts_with("an API key needs a password:") {
+        "api_key_needs_password"
     } else if message.starts_with("dns_min_ttl must be between") {
         "dns_min_ttl_range"
     } else if message.starts_with("dns_max_ttl must be between") {
@@ -155,6 +159,15 @@ mod tests {
             )),
             "invalid_client_key"
         );
+        for (message, code) in [
+            (
+                "the API key needs the password: …",
+                "password_kept_for_api_key",
+            ),
+            ("an API key needs a password: …", "api_key_needs_password"),
+        ] {
+            assert_eq!(api_error_code(&FeriteError::Config(message.into())), code);
+        }
     }
 
     #[test]

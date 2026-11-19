@@ -381,7 +381,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::OK);
+        // The auth endpoint answers itself, not the middleware: without the
+        // key it isn't signed in, and says the key is what signs in.
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["api_key_only"], true);
 
         drop(state);
         test_support::cleanup_sqlite(&db_path);
