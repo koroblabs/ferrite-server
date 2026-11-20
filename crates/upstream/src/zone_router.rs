@@ -56,6 +56,11 @@ impl ZoneRouter {
         Ok(())
     }
 
+    /// The pool for everything no zone takes: the configured upstreams.
+    pub fn default_pool(&self) -> Arc<UpstreamPool> {
+        Arc::clone(&self.routes.load().default)
+    }
+
     /// Forward a raw DNS query, routing by zone if applicable.
     pub async fn resolve_raw(&self, raw: Vec<u8>) -> Result<(Vec<u8>, String)> {
         // Held across the await: a swap mid-query doesn't pull the routes out

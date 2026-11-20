@@ -152,7 +152,10 @@ impl StreamPool {
                 )
                 .await
                 .map_err(|_| FeriteError::Dns(format!("tls handshake timeout to {}", self.addr)))?
-                .map_err(|e| FeriteError::Dns(format!("tls handshake to {}: {e}", self.addr)))?;
+                .map_err(|e| {
+                    let why = crate::tidy_tls(&e.to_string());
+                    FeriteError::Dns(format!("tls handshake to {}: {why}", self.addr))
+                })?;
                 Ok(Conn::Tls(Box::new(stream)))
             }
         }

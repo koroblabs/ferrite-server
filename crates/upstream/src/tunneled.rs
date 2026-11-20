@@ -111,7 +111,10 @@ impl TunneledResolver {
                 )
                 .await
                 .map_err(|_| FeriteError::Dns(format!("{}: tls handshake timed out", self.label)))?
-                .map_err(|e| FeriteError::Dns(format!("{}: tls handshake: {e}", self.label)))?;
+                .map_err(|e| {
+                    let why = crate::tidy_tls(&e.to_string());
+                    FeriteError::Dns(format!("{}: tls handshake: {why}", self.label))
+                })?;
                 self.exchange(stream, &raw).await?
             }
             None => self.exchange(conn, &raw).await?,

@@ -594,6 +594,11 @@ pub async fn update_settings(
                     "upstream list cannot be empty".into(),
                 )));
             }
+            // New upstreams are checked harder than a config loaded at start:
+            // a tls_name with a scheme or a port in it never connects.
+            if let Some(new) = &patch.upstream {
+                ferrite_upstream::check(new).map_err(ApiError)?;
+            }
             let pool =
                 UpstreamPool::from_config(&upstream, Arc::clone(&state.inner.upstream_proxy))
                     .map_err(ApiError)?;
@@ -796,7 +801,7 @@ pub async fn update_settings(
         schedule_restart(&state);
     }
 
-    Ok(Json(json!({
+    let mut body = json!({
         "status": "ok",
         "changed": hot_changed.iter().chain(restart_changed.iter()).collect::<Vec<_>>(),
         "hot_changed": hot_changed,
@@ -804,7 +809,16 @@ pub async fn update_settings(
         "restart_required": needs_restart,
         "persisted": saved_path.is_some(),
         "saved_to": saved_path,
-    })))
+    });
+    // Saved either way — a box offline for the moment still keeps its
+    // settings — but whoever saved hears which upstreams don't answer, and why.
+    if hot_changed.contains(&"upstream") {
+        let upstream = state.live_config.read().upstream.clone();
+        let found = crate::upstreams::check_all(&state, &upstream).await;
+        state.inner.upstream_pool.default_pool().note(&found);
+        body["upstream_checks"] = json!(found);
+    }
+    Ok(Json(body))
 }
 
 /// Save the snapshot and exit, leaving the supervisor to start us again.

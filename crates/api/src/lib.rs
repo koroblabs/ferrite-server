@@ -31,6 +31,7 @@ pub mod sync;
 pub mod system;
 pub mod tools;
 pub mod update;
+pub mod upstreams;
 mod web;
 
 pub use error::ApiError;
@@ -165,6 +166,8 @@ pub fn build_router(state: AppState) -> Router {
         // Settings
         .route("/settings", get(settings::get_settings))
         .route("/settings", patch(settings::update_settings))
+        .route("/upstreams/status", get(upstreams::status))
+        .route("/upstreams/test", post(upstreams::test))
         // Where the database can live
         .route("/storage/locations", get(storage::list_locations))
         // Selective routing / proxy
